@@ -272,9 +272,9 @@ mod tests {
             r#"CREATE USER 'user9'@'localhost' 
         IDENTIFIED BY 'pass123' 
         REQUIRE SSL"#,
-            // 带账户锁定选项
+            // account lock
             "CREATE USER 'user10'@'localhost' IDENTIFIED BY 'pass123' ACCOUNT LOCK",
-            // 完整选项示例
+            // full options
             r#"CREATE USER IF NOT EXISTS 'user11'@'localhost'
         IDENTIFIED WITH mysql_native_password BY 'pass123'
         REQUIRE SSL

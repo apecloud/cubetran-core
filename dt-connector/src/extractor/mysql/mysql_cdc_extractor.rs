@@ -343,7 +343,7 @@ impl MysqlCdcExtractor {
     ) -> anyhow::Result<()> {
         // TODO, currently we do not parse ddl if filtered,
         // but we should always try to parse ddl in the future
-        if self.filter.filter_all_ddl() {
+        if self.filter.filter_all_ddl() && self.filter.filter_all_dcl() {
             return Ok(());
         }
 
@@ -351,27 +351,53 @@ impl MysqlCdcExtractor {
             return Ok(());
         }
 
-        log_info!("received ddl: {:?}", query);
-        if let Ok(ddl_data) = self
-            .base_extractor
-            .parse_ddl(&DbType::Mysql, &query.schema, &query.query)
-            .await
-        {
-            for sub_ddl_data in ddl_data.clone().split_to_multi() {
-                let (db, tb) = sub_ddl_data.get_schema_tb();
-                // invalidate metadata cache
-                self.meta_manager.invalidate_cache(&db, &tb);
-                if !self.filter.filter_ddl(&db, &tb, &sub_ddl_data.ddl_type) {
+        if !self.filter.filter_all_dcl() {
+            // try to parse dcl
+            if let Ok(dcl_data) = self
+                .base_extractor
+                .parse_dcl(&DbType::Mysql, &query.schema, &query.query)
+                .await
+            {
+                if !self.filter.filter_dcl(&dcl_data.dcl_type) {
                     self.base_extractor
-                        .push_ddl(sub_ddl_data.clone(), position.clone())
+                        .push_dcl(dcl_data.clone(), position.clone())
                         .await?;
                 }
             }
+            return Ok(());
+        }
 
-            if let Some(meta_center) = &mut self.meta_manager.meta_center {
-                meta_center.sync_from_ddl(&ddl_data).await?;
+        if !self.filter.filter_all_ddl() {
+            // try to parse ddl
+            if let Ok(ddl_data) = self
+                .base_extractor
+                .parse_ddl(&DbType::Mysql, &query.schema, &query.query)
+                .await
+            {
+                for sub_ddl_data in ddl_data.clone().split_to_multi() {
+                    let (db, tb) = sub_ddl_data.get_schema_tb();
+                    // invalidate metadata cache
+                    self.meta_manager.invalidate_cache(&db, &tb);
+                    if !self.filter.filter_ddl(&db, &tb, &sub_ddl_data.ddl_type) {
+                        self.base_extractor
+                            .push_ddl(sub_ddl_data.clone(), position.clone())
+                            .await?;
+                    }
+                }
+
+                if let Some(meta_center) = &mut self.meta_manager.meta_center {
+                    meta_center.sync_from_ddl(&ddl_data).await?;
+                }
+
+                return Ok(());
             }
         }
+
+        log_error!(
+                "received query event, but not dcl or ddl, sql: {}, maybe should execute it manually in target",
+                query.query
+            );
+
         Ok(())
     }
 

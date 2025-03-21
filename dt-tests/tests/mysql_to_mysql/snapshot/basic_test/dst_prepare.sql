@@ -55,3 +55,19 @@ CREATE TABLE Upper_Case_DB.Upper_Case_TB (
 CREATE TABLE test_db_1.where_condition_1 ( f_0 int, f_1 int ); 
 CREATE TABLE test_db_1.where_condition_2 ( f_0 int, f_1 int, PRIMARY KEY (f_0) ); 
 CREATE TABLE test_db_1.where_condition_3 ( f_0 int, f_1 int ); 
+
+```
+CREATE TABLE test_db_1.zero_date_time_table ( f_0 int, 
+    f_1 datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
+    f_2 time NOT NULL DEFAULT '00:00:00',
+    f_3 date NOT NULL DEFAULT '0000-00-00',
+    f_4 timestamp NOT NULL DEFAULT '0000-00-00 00:00:00',
+    PRIMARY KEY(f_0)
+);
+```
+
+-- test foreign key
+CREATE TABLE test_db_1.fk_tb_2 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
+CREATE TABLE test_db_1.fk_tb_1 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
+ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_1 FOREIGN KEY (f_1) REFERENCES test_db_1.fk_tb_2 (f_1);
+ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_2 FOREIGN KEY (f_2) REFERENCES test_db_1.fk_tb_2 (f_2);

@@ -28,6 +28,7 @@ const CHARACTER_MAXIMUM_LENGTH: &str = "CHARACTER_MAXIMUM_LENGTH";
 const CHARACTER_SET_NAME: &str = "CHARACTER_SET_NAME";
 const NUMERIC_PRECISION: &str = "NUMERIC_PRECISION";
 const NUMERIC_SCALE: &str = "NUMERIC_SCALE";
+const IS_NULLABLE: &str = "IS_NULLABLE";
 
 impl MysqlMetaFetcher {
     pub async fn new(conn_pool: Pool<MySql>) -> anyhow::Result<Self> {
@@ -87,8 +88,11 @@ impl MysqlMetaFetcher {
             let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
             let (order_col, partition_col, id_cols) =
                 RdbMetaManager::parse_rdb_cols(&key_map, &cols)?;
-            let (foreign_keys, ref_by_foreign_keys) =
-                Self::get_foreign_keys(&self.conn_pool, &self.db_type, schema, tb).await?;
+            // disable get_foreign_keys since we don't support foreign key check,
+            // also quering them is very slow, which may casue terrible performance issue if there were many tables in a CDC task.
+            let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
+            // let (foreign_keys, ref_by_foreign_keys) =
+            //     Self::get_foreign_keys(&self.conn_pool, &self.db_type, schema, tb).await?;
 
             let basic = RdbTbMeta {
                 schema: schema.to_string(),
@@ -125,40 +129,19 @@ impl MysqlMetaFetcher {
         let mut col_origin_type_map = HashMap::new();
         let mut col_type_map = HashMap::new();
 
-        let sql = format!("DESC `{}`.`{}`", schema, tb);
-        let mut rows = sqlx::query(&sql).disable_arguments().fetch(conn_pool);
-        while let Some(row) = rows.try_next().await? {
-            // Column and index names are not case sensitive on any platform, nor are column aliases.
-            // But when table created with uppercase columns, DESC table will return uppercase fields
-            // CREATE TABLE Upper_Case_DB.Upper_Case_TB (
-            //     Id INT,
-            //     FIELD_1 INT,
-            //     field_2 INT,
-            //     PRIMARY KEY(Id),
-            //     UNIQUE KEY(FIELD_1, field_2)
-            // );
-            // mysql> DESC upper_case_db.upper_case_tb;
-            // +---------+---------+------+-----+---------+-------+
-            // | Field   | Type    | Null | Key | Default | Extra |
-            // +---------+---------+------+-----+---------+-------+
-            // | Id      | int(11) | NO   | PRI | NULL    |       |
-            // | FIELD_1 | int(11) | YES  | MUL | NULL    |       |
-            // | field_2 | int(11) | YES  |     | NULL    |       |
-            // +---------+---------+------+-----+---------+-------+
-            let col: String = row.try_get("Field")?;
-            cols.push(col.to_lowercase());
-        }
-
-        let sql = if db_type == &DbType::Mysql {
-            format!("SELECT {}, {}, {}, {}, {}, {}, {} FROM information_schema.columns WHERE table_schema = ? AND table_name = ?", 
-                COLUMN_NAME, COLUMN_TYPE, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, CHARACTER_SET_NAME, NUMERIC_PRECISION, NUMERIC_SCALE)
+        let sql = if matches!(db_type, DbType::Mysql) {
+            "SELECT * FROM information_schema.columns
+             WHERE table_schema = ? AND table_name = ? ORDER BY ORDINAL_POSITION"
+                .to_string()
         } else {
-            // starrocks
-            format!("SELECT {}, {}, {}, {}, {}, {}, {} FROM information_schema.columns WHERE table_schema = '{}' AND table_name = '{}'", 
-                COLUMN_NAME, COLUMN_TYPE, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, CHARACTER_SET_NAME, NUMERIC_PRECISION, NUMERIC_SCALE, &schema, &tb)
+            format!(
+                "SELECT * FROM information_schema.columns 
+                WHERE table_schema = '{}' AND table_name = '{}' ORDER BY ORDINAL_POSITION",
+                schema, tb
+            )
         };
 
-        let mut rows = if db_type == &DbType::Mysql {
+        let mut rows = if matches!(db_type, DbType::Mysql) {
             sqlx::query(&sql).bind(schema).bind(tb).fetch(conn_pool)
         } else {
             // for starrocks
@@ -167,7 +150,9 @@ impl MysqlMetaFetcher {
 
         while let Some(row) = rows.try_next().await? {
             let mut col: String = row.try_get(COLUMN_NAME)?;
+            // Column and index names are not case sensitive on any platform, nor are column aliases.
             col = col.to_lowercase();
+            cols.push(col.clone());
             let (origin_type, col_type) = Self::get_col_type(&row).await?;
             col_origin_type_map.insert(col.clone(), origin_type);
             col_type_map.insert(col, col_type);
@@ -185,6 +170,7 @@ impl MysqlMetaFetcher {
     async fn get_col_type(row: &MySqlRow) -> anyhow::Result<(String, MysqlColType)> {
         let column_type: String = row.try_get(COLUMN_TYPE)?;
         let data_type: String = row.try_get(DATA_TYPE)?;
+        let is_nullable = row.try_get::<String, _>(IS_NULLABLE)?.to_lowercase() == "yes";
 
         let parse_precesion = || {
             let precision = if column_type.contains('(') {
@@ -241,6 +227,7 @@ impl MysqlMetaFetcher {
             "timestamp" => MysqlColType::Timestamp {
                 precision: parse_precesion(),
                 timezone_offset: 0,
+                is_nullable,
             },
 
             "tinyblob" => MysqlColType::TinyBlob,
@@ -298,9 +285,10 @@ impl MysqlMetaFetcher {
 
             "datetime" => MysqlColType::DateTime {
                 precision: parse_precesion(),
+                is_nullable,
             },
 
-            "date" => MysqlColType::Date,
+            "date" => MysqlColType::Date { is_nullable },
             "time" => MysqlColType::Time {
                 precision: parse_precesion(),
             },
@@ -365,6 +353,7 @@ impl MysqlMetaFetcher {
         Ok(key_map)
     }
 
+    #[allow(dead_code)]
     async fn get_foreign_keys(
         conn_pool: &Pool<MySql>,
         db_type: &DbType,
@@ -377,6 +366,8 @@ impl MysqlMetaFetcher {
             return Ok((foreign_keys, ref_by_foreign_keys));
         }
 
+        // this will be a very slow query if NOT set "SET GLOBAL innodb_stats_on_metadata = OFF;"
+        // https://www.percona.com/blog/innodb_stats_on_metadata-slow-queries-information_schema/
         let sql = format!(
             "SELECT
                 kcu.CONSTRAINT_SCHEMA,

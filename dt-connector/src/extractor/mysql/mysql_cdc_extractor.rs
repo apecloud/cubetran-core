@@ -12,10 +12,13 @@ use std::{
     time::Instant,
 };
 
-use dt_common::meta::{
-    adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
-    dt_data::DtData, mysql::mysql_meta_manager::MysqlMetaManager, position::Position,
-    row_data::RowData, row_type::RowType, syncer::Syncer,
+use dt_common::{
+    log_debug, log_warn,
+    meta::{
+        adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
+        dt_data::DtData, mysql::mysql_meta_manager::MysqlMetaManager, position::Position,
+        row_data::RowData, row_type::RowType, syncer::Syncer,
+    },
 };
 use mysql_binlog_connector_rust::{
     binlog_client::BinlogClient,
@@ -51,6 +54,8 @@ pub struct MysqlCdcExtractor {
     pub server_id: u64,
     pub gtid_enabled: bool,
     pub gtid_set: String,
+    pub binlog_heartbeat_interval_secs: u64,
+    pub binlog_timeout_secs: u64,
     pub heartbeat_interval_secs: u64,
     pub heartbeat_tb: String,
     pub syncer: Arc<Mutex<Syncer>>,
@@ -89,6 +94,12 @@ impl Extractor for MysqlCdcExtractor {
             self.binlog_position = next_event_position.to_owned();
             self.gtid_set = gtid_set.to_owned();
             log_info!("resume from: {}", self.resumer.checkpoint_position);
+            self.base_extractor
+                .push_dt_data(
+                    DtData::Heartbeat {},
+                    self.resumer.checkpoint_position.clone(),
+                )
+                .await?;
         }
 
         log_info!(
@@ -119,6 +130,8 @@ impl MysqlCdcExtractor {
             server_id: self.server_id,
             gtid_enabled: self.gtid_enabled,
             gtid_set: self.gtid_set.clone(),
+            heartbeat_interval_secs: self.binlog_heartbeat_interval_secs,
+            timeout_secs: self.binlog_timeout_secs,
         };
         let mut stream = client.connect().await?;
 
@@ -158,6 +171,12 @@ impl MysqlCdcExtractor {
         data: EventData,
         ctx: &mut Context,
     ) -> anyhow::Result<()> {
+        log_debug!(
+            "received binlog, event header: {:?}, event data: {:?}",
+            header,
+            data
+        );
+
         // TODO, get server_id from source mysql
         let server_id = String::new();
         let timestamp = Position::format_timestamp_millis(header.timestamp as i64 * 1000);
@@ -319,7 +338,7 @@ impl MysqlCdcExtractor {
         let col_count = cmp::min(tb_meta.basic.cols.len(), included_columns.len());
         for i in (0..col_count).rev() {
             let col = tb_meta.basic.cols.get(i).unwrap();
-            if ignore_cols.map_or(false, |cols| cols.contains(col)) {
+            if ignore_cols.is_some_and(|cols| cols.contains(col)) {
                 continue;
             }
 
@@ -352,48 +371,52 @@ impl MysqlCdcExtractor {
         }
 
         if !self.filter.filter_all_dcl() {
-            // try to parse dcl
-            if let Ok(dcl_data) = self
+            match self
                 .base_extractor
                 .parse_dcl(&DbType::Mysql, &query.schema, &query.query)
                 .await
             {
-                if !self.filter.filter_dcl(&dcl_data.dcl_type) {
-                    self.base_extractor
-                        .push_dcl(dcl_data.clone(), position.clone())
-                        .await?;
+                Ok(dcl_data) => {
+                    if !self.filter.filter_dcl(&dcl_data.dcl_type) {
+                        self.base_extractor
+                            .push_dcl(dcl_data.clone(), position.clone())
+                            .await?;
+                    }
+                    return Ok(());
                 }
+                Err(_) => {}
             }
-            return Ok(());
         }
 
         if !self.filter.filter_all_ddl() {
-            // try to parse ddl
-            if let Ok(ddl_data) = self
+            match self
                 .base_extractor
                 .parse_ddl(&DbType::Mysql, &query.schema, &query.query)
                 .await
             {
-                for sub_ddl_data in ddl_data.clone().split_to_multi() {
-                    let (db, tb) = sub_ddl_data.get_schema_tb();
-                    // invalidate metadata cache
-                    self.meta_manager.invalidate_cache(&db, &tb);
-                    if !self.filter.filter_ddl(&db, &tb, &sub_ddl_data.ddl_type) {
-                        self.base_extractor
-                            .push_ddl(sub_ddl_data.clone(), position.clone())
-                            .await?;
+                Ok(ddl_data) => {
+                    for sub_ddl_data in ddl_data.clone().split_to_multi() {
+                        let (db, tb) = sub_ddl_data.get_schema_tb();
+                        // invalidate metadata cache
+                        self.meta_manager.invalidate_cache(&db, &tb);
+                        if !self.filter.filter_ddl(&db, &tb, &sub_ddl_data.ddl_type) {
+                            self.base_extractor
+                                .push_ddl(sub_ddl_data.clone(), position.clone())
+                                .await?;
+                        }
                     }
-                }
 
-                if let Some(meta_center) = &mut self.meta_manager.meta_center {
-                    meta_center.sync_from_ddl(&ddl_data).await?;
-                }
+                    if let Some(meta_center) = &mut self.meta_manager.meta_center {
+                        meta_center.sync_from_ddl(&ddl_data).await?;
+                    }
 
-                return Ok(());
+                    return Ok(());
+                }
+                Err(_) => {}
             }
         }
 
-        log_error!(
+        log_warn!(
                 "received query event, but not dcl or ddl, sql: {}, maybe should execute it manually in target",
                 query.query
             );

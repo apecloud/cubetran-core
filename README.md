@@ -65,6 +65,7 @@ Refer to [test docs](./dt-tests/README.md) for details.
     - [data revise](./docs/en/snapshot/revise.md)
     - [data review](./docs/en/snapshot/review.md)
     - [resume at breakpoint](./docs/en/snapshot/resume.md)
+    - [multiple tables in parallel](./docs/en/snapshot/tb_in_parallel.md)
 - CDC tasks
     - [data sync](./docs/en/cdc/sync.md)
     - [heartbeat to source database](./docs/en/cdc/heartbeat.md)
@@ -148,6 +149,9 @@ Refer to [test docs](./dt-tests/README.md) for details.
 
 [Slack Community](https://join.slack.com/t/kubeblocks/shared_invite/zt-22cx2f84x-BPZvnLRqBOGdZ_XSjELh4Q)
 
-Wechat Group
+WeChat Group 
+- The WeChat group has reached its limit of 200 members and cannot be scanned to join in. 
+- Please add this WeChat, and you will be manually pulled into the group. 
+- When adding the WeChat, please note: **ape-dts**.
 
 <img src="./docs/img/wechat_group.png" width="55%" style="display: block; margin-left: 0;"/>

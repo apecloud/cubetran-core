@@ -12,9 +12,11 @@ use dt_common::meta::{
     rdb_meta_manager::RdbMetaManager,
 };
 use futures::TryStreamExt;
+use mongodb::bson::doc;
 use mongodb::options::ClientOptions;
 use rusoto_core::Region;
 use rusoto_s3::S3Client;
+use sqlx::Executor;
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -35,8 +37,8 @@ impl TaskUtil {
         let mut conn_options = MySqlConnectOptions::from_str(url)?;
         // The default character set is `utf8mb4`
         conn_options
-            .log_statements(log::LevelFilter::Info)
-            .log_slow_statements(log::LevelFilter::Info, Duration::from_secs(1));
+            .log_statements(log::LevelFilter::Debug)
+            .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
 
         if !enable_sqlx_log {
             conn_options.disable_statement_logging();
@@ -44,6 +46,13 @@ impl TaskUtil {
 
         let conn_pool = MySqlPoolOptions::new()
             .max_connections(max_connections)
+            .after_connect(move |conn, _meta| {
+                Box::pin(async move {
+                    conn.execute(sqlx::query("SET foreign_key_checks = 0;"))
+                        .await?;
+                    Ok(())
+                })
+            })
             .connect_with(conn_options)
             .await?;
         Ok(conn_pool)
@@ -56,8 +65,8 @@ impl TaskUtil {
     ) -> anyhow::Result<Pool<Postgres>> {
         let mut conn_options = PgConnectOptions::from_str(url)?;
         conn_options
-            .log_statements(log::LevelFilter::Info)
-            .log_slow_statements(log::LevelFilter::Info, Duration::from_secs(1));
+            .log_statements(log::LevelFilter::Debug)
+            .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
 
         if !enable_sqlx_log {
             conn_options.disable_statement_logging();
@@ -65,6 +74,14 @@ impl TaskUtil {
 
         let conn_pool = PgPoolOptions::new()
             .max_connections(max_connections)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    // disable foreign key checks
+                    conn.execute("SET session_replication_role = 'replica';")
+                        .await?;
+                    Ok(())
+                })
+            })
             .connect_with(conn_options)
             .await?;
         Ok(conn_pool)
@@ -261,7 +278,8 @@ impl TaskUtil {
             "SELECT table_name 
             FROM information_schema.tables
             WHERE table_catalog = current_database() 
-            AND table_schema = '{}'",
+            AND table_schema = '{}' 
+            AND table_type = 'BASE TABLE'",
             schema
         );
         let mut rows = sqlx::query(&sql).fetch(&conn_pool);
@@ -294,11 +312,14 @@ impl TaskUtil {
         let mut tbs = Vec::new();
         let conn_pool = Self::create_mysql_conn_pool(url, 1, false).await?;
 
-        let sql = format!("SHOW TABLES IN `{}`", db);
+        let sql = format!("SHOW FULL TABLES IN `{}`", db);
         let mut rows = sqlx::query(&sql).fetch(&conn_pool);
         while let Some(row) = rows.try_next().await.unwrap() {
             let tb: String = row.try_get(0)?;
-            tbs.push(tb);
+            let tb_type: String = row.try_get(1)?;
+            if tb_type == "BASE TABLE" {
+                tbs.push(tb);
+            }
         }
         conn_pool.close().await;
         Ok(tbs)
@@ -313,7 +334,14 @@ impl TaskUtil {
 
     async fn list_mongo_tbs(url: &str, db: &str) -> anyhow::Result<Vec<String>> {
         let client = Self::create_mongo_client(url, "").await?;
-        let tbs = client.database(db).list_collection_names(None).await?;
+        // filter views and system tables
+        let tbs = client
+            .database(db)
+            .list_collection_names(Some(doc! { "type": "collection" }))
+            .await?
+            .into_iter()
+            .filter(|name| !name.starts_with("system."))
+            .collect();
         client.shutdown().await;
         Ok(tbs)
     }

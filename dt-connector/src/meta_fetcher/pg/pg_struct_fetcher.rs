@@ -7,7 +7,7 @@ use dt_common::meta::struct_meta::{
         pg_create_table_statement::PgCreateTableStatement,
     },
     structure::{
-        column::Column,
+        column::{Column, ColumnDefault},
         comment::{Comment, CommentType},
         constraint::{Constraint, ConstraintType},
         index::{Index, IndexKind},
@@ -204,7 +204,7 @@ impl PgStructFetcher {
 
         let mut independent_squence_names = Vec::new();
         for column in table.columns.iter() {
-            if let Some(default_value) = &column.column_default {
+            if let Some(ColumnDefault::Literal(default_value)) = &column.column_default {
                 let (schema, sequence_name) =
                     Self::get_sequence_name_by_default_value(default_value);
                 // example, default_value is 'Standard'::text
@@ -314,28 +314,32 @@ impl PgStructFetcher {
         let mut results: BTreeMap<String, Table> = BTreeMap::new();
 
         let tb_filter = if !tb.is_empty() {
-            format!("AND table_name = '{}'", tb)
+            format!("AND c.table_name = '{}'", tb)
         } else {
             String::new()
         };
 
         let sql = format!(
-            "SELECT table_schema,
-                table_name,
-                column_name,
-                data_type,
-                udt_name,
-                character_maximum_length,
-                is_nullable,
-                column_default,
-                numeric_precision,
-                numeric_scale,
-                is_identity,
-                identity_generation,
-                ordinal_position
+            "SELECT c.table_schema,
+                c.table_name,
+                c.column_name,
+                c.data_type,
+                c.udt_name,
+                c.character_maximum_length,
+                c.is_nullable,
+                c.column_default,
+                c.numeric_precision,
+                c.numeric_scale,
+                c.is_identity,
+                c.identity_generation,
+                c.ordinal_position
             FROM information_schema.columns c
-            WHERE table_schema ='{}' {} 
-            ORDER BY table_schema, table_name, ordinal_position",
+            JOIN information_schema.tables t 
+                ON c.table_schema = t.table_schema 
+                AND c.table_name = t.table_name
+            WHERE c.table_schema ='{}' {} 
+                AND t.table_type = 'BASE TABLE'
+            ORDER BY c.table_schema, c.table_name, c.ordinal_position",
             &self.schema, tb_filter
         );
 
@@ -355,10 +359,13 @@ impl PgStructFetcher {
             let identity_generation = row.get("identity_generation");
             let generation_rule = Self::get_col_generation_rule(is_identity, identity_generation);
             let is_nullable = Self::get_str_with_null(&row, "is_nullable")?.to_lowercase() == "yes";
+            let column_default = row
+                .get::<Option<String>, _>("column_default")
+                .map(ColumnDefault::Literal);
             let column = Column {
                 column_name: Self::get_str_with_null(&row, "column_name")?,
                 ordinal_position: ordinal_position as u32,
-                column_default: row.get("column_default"),
+                column_default,
                 is_nullable,
                 generated: generation_rule,
                 ..Default::default()

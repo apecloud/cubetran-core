@@ -142,6 +142,16 @@ impl TaskConfig {
                     server_id: loader.get_required(EXTRACTOR, "server_id"),
                     gtid_enabled: loader.get_optional(EXTRACTOR, "gtid_enabled"),
                     gtid_set: loader.get_optional(EXTRACTOR, "gtid_set"),
+                    binlog_heartbeat_interval_secs: loader.get_with_default(
+                        EXTRACTOR,
+                        "binlog_heartbeat_interval_secs",
+                        10,
+                    ),
+                    binlog_timeout_secs: loader.get_with_default(
+                        EXTRACTOR,
+                        "binlog_timeout_secs",
+                        60,
+                    ),
                     heartbeat_interval_secs,
                     heartbeat_tb,
                     start_time_utc: loader.get_optional(EXTRACTOR, "start_time_utc"),
@@ -575,6 +585,7 @@ impl TaskConfig {
                 "log4rs_file",
                 "./log4rs.yaml".to_string(),
             ),
+            tb_parallel_size: loader.get_with_default(RUNTIME, "tb_parallel_size", 1),
         })
     }
 

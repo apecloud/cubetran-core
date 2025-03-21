@@ -13,7 +13,7 @@ use std::{
 };
 
 use dt_common::{
-    log_warn,
+    log_debug, log_warn,
     meta::{
         adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
         dt_data::DtData, mysql::mysql_meta_manager::MysqlMetaManager, position::Position,
@@ -54,6 +54,8 @@ pub struct MysqlCdcExtractor {
     pub server_id: u64,
     pub gtid_enabled: bool,
     pub gtid_set: String,
+    pub binlog_heartbeat_interval_secs: u64,
+    pub binlog_timeout_secs: u64,
     pub heartbeat_interval_secs: u64,
     pub heartbeat_tb: String,
     pub syncer: Arc<Mutex<Syncer>>,
@@ -92,6 +94,12 @@ impl Extractor for MysqlCdcExtractor {
             self.binlog_position = next_event_position.to_owned();
             self.gtid_set = gtid_set.to_owned();
             log_info!("resume from: {}", self.resumer.checkpoint_position);
+            self.base_extractor
+                .push_dt_data(
+                    DtData::Heartbeat {},
+                    self.resumer.checkpoint_position.clone(),
+                )
+                .await?;
         }
 
         log_info!(
@@ -122,6 +130,8 @@ impl MysqlCdcExtractor {
             server_id: self.server_id,
             gtid_enabled: self.gtid_enabled,
             gtid_set: self.gtid_set.clone(),
+            heartbeat_interval_secs: self.binlog_heartbeat_interval_secs,
+            timeout_secs: self.binlog_timeout_secs,
         };
         let mut stream = client.connect().await?;
 
@@ -161,6 +171,12 @@ impl MysqlCdcExtractor {
         data: EventData,
         ctx: &mut Context,
     ) -> anyhow::Result<()> {
+        log_debug!(
+            "received binlog, event header: {:?}, event data: {:?}",
+            header,
+            data
+        );
+
         // TODO, get server_id from source mysql
         let server_id = String::new();
         let timestamp = Position::format_timestamp_millis(header.timestamp as i64 * 1000);
@@ -322,7 +338,7 @@ impl MysqlCdcExtractor {
         let col_count = cmp::min(tb_meta.basic.cols.len(), included_columns.len());
         for i in (0..col_count).rev() {
             let col = tb_meta.basic.cols.get(i).unwrap();
-            if ignore_cols.map_or(false, |cols| cols.contains(col)) {
+            if ignore_cols.is_some_and(|cols| cols.contains(col)) {
                 continue;
             }
 

@@ -66,6 +66,7 @@
     - [订正](./docs/zh/snapshot/revise.md)
     - [复查](./docs/zh/snapshot/review.md)
     - [断点续传](./docs/zh/snapshot/resume.md)
+    - [多表并行](./docs/zh/snapshot/tb_in_parallel.md)
 - 增量任务
     - [迁移](./docs/zh/cdc/sync.md)
     - [开启源库心跳](./docs/zh/cdc/heartbeat.md)
@@ -147,5 +148,8 @@
 [Slack社区](https://join.slack.com/t/kubeblocks/shared_invite/zt-22cx2f84x-BPZvnLRqBOGdZ_XSjELh4Q)
 
 微信交流群
+- 微信群已满 200，无法自动扫描进群
+- 请添加此微信，将手动拉你进群
+- 添加时请备注：**ape-dts**
 
 <img src="./docs/img/wechat_group.png" width="55%" style="display: block; margin-left: 0;"/>

@@ -8,7 +8,7 @@ use anyhow::bail;
 use dt_common::{
     config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
     error::Error,
-    log_error, log_info, log_warn,
+    log_debug, log_error, log_info, log_warn,
     meta::{
         dcl_meta::{dcl_data::DclData, dcl_parser::DclParser},
         ddl_meta::ddl_data::DdlData,
@@ -27,6 +27,7 @@ use dt_common::{
     },
     time_filter::TimeFilter,
 };
+use serde_json::json;
 
 use crate::{data_marker::DataMarker, rdb_router::RdbRouter};
 
@@ -77,6 +78,7 @@ impl BaseExtractor {
             position,
             data_origin_node,
         };
+        log_debug!("extracted item: {}", json!(item));
         self.buffer.push(item).await
     }
 

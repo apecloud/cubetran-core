@@ -173,7 +173,6 @@ impl BaseExtractor {
                 "failed to parse dcl, will try ignore it, sql: {}, error: {}",
                 query, err
             );
-            log_error!("{}", error);
             bail! {Error::Unexpected(error)}
         }
         let dcl_data = parse_result.unwrap();

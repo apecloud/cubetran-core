@@ -339,12 +339,17 @@ impl ExtractorUtil {
                 Box::new(extractor)
             }
 
-            ExtractorConfig::PgStruct { url, schema } => {
+            ExtractorConfig::PgStruct {
+                url,
+                schema,
+                do_global_structs,
+            } => {
                 // TODO, pass max_connections as parameter
                 let conn_pool = TaskUtil::create_pg_conn_pool(&url, 2, enable_sqlx_log).await?;
                 let extractor = PgStructExtractor {
                     conn_pool,
                     schema,
+                    do_global_structs,
                     filter,
                     base_extractor,
                 };

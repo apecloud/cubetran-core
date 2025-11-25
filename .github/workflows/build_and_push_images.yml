@@ -33,11 +33,11 @@ jobs:
       - name: Set up rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: 1.87.0
           override: true
 
       - name: Install cross
-        run: cargo install cross
+        run: cargo install cross --version 0.1.16
 
       - name: Build for x86_64
         if: contains(inputs.platforms, 'linux/amd64')
